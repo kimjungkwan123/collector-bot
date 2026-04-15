@@ -1,6 +1,7 @@
 """
 리셀 마켓 분석 엔진 — Claude AI를 사용해 카테고리별 Top 아이템 분석
 """
+import html
 import anthropic
 import os
 from datetime import datetime
@@ -81,26 +82,30 @@ def format_trend_arrow(trend: str) -> str:
     return arrows.get(trend, "➡️")
 
 def format_category_report(category: dict, analysis_data: dict) -> str:
-    """카테고리 분석 결과를 텔레그램 메시지 형식으로 변환"""
+    """카테고리 분석 결과를 텔레그램 메시지 형식으로 변환.
+
+    Claude가 반환한 문자열 필드에 <, >, & 가 들어있으면 Telegram HTML 파서가
+    메시지 전체를 거부한다. 사용자에게 보여지는 모든 필드는 html.escape 처리한다.
+    """
     emoji = category["emoji"]
-    name = category["name"]
-    summary = analysis_data.get("market_summary", "")
+    name = html.escape(category["name"])
+    summary = analysis_data.get("market_summary", "") or ""
     items = analysis_data.get("items", [])
 
     lines = []
     lines.append(f"{emoji} <b>{name}</b>")
     if summary:
-        lines.append(f'<i>"{summary}"</i>')
+        lines.append(f'<i>"{html.escape(summary)}"</i>')
     lines.append("")
 
     for item in items:
         rank = item.get("rank", "")
-        item_name = item.get("name", "")
-        price = item.get("price_range", "")
+        item_name = html.escape(str(item.get("name", "")))
+        price = html.escape(str(item.get("price_range", "")))
         trend = item.get("price_trend", "보합")
-        background = item.get("background", "")
-        invest = item.get("investment_point", "")
-        forecast = item.get("forecast", "")
+        background = html.escape(str(item.get("background", "")))
+        invest = html.escape(str(item.get("investment_point", "")))
+        forecast = html.escape(str(item.get("forecast", "")))
         score = item.get("score", 50)
         bar = build_progress_bar(score)
         arrow = format_trend_arrow(trend)
