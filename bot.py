@@ -20,6 +20,11 @@ from telegram.ext import (
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from analyzer import run_full_analysis, build_header, build_footer
+from sports_events import (
+    run_sports_events_collection,
+    build_sports_header,
+    build_sports_footer,
+)
 
 # ─── 환경 변수 로드 ────────────────────────────────────────────
 load_dotenv()
@@ -107,7 +112,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📊 <b>리셀 마켓 분석 봇</b>입니다.\n\n"
         f"매일 <b>{REPORT_HOUR:02d}:{REPORT_MINUTE:02d}</b>에 5개 카테고리 리포트를 자동 발송합니다.\n\n"
         f"<b>커맨드 목록:</b>\n"
-        f"/report — 즉시 리포트 받기\n"
+        f"/report — 즉시 리셀 리포트 받기\n"
+        f"/sports — 캐주얼 스포츠 대회 모음 (하이록스·마라톤·펀런 등)\n"
         f"/status — 봇 상태 확인\n"
         f"/help — 도움말\n"
     )
@@ -117,19 +123,26 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """'/help' 커맨드"""
     text = (
-        "📖 <b>리셀 마켓 분석 봇 도움말</b>\n\n"
+        "📖 <b>컬렉터 봇 도움말</b>\n\n"
         "<b>커맨드:</b>\n"
         "/start — 봇 시작\n"
-        "/report — 즉시 리포트 요청\n"
+        "/report — 리셀 마켓 리포트 즉시 요청\n"
+        "/sports — 캐주얼 스포츠 대회 모음 요청\n"
         "/status — 봇 상태 & 다음 발송 시간\n"
         "/help — 이 도움말\n\n"
-        "<b>분석 카테고리:</b>\n"
+        "<b>💰 리셀 분석 카테고리:</b>\n"
         "🎨 아트토이\n"
         "🃏 TCG / 포켓몬 카드\n"
         "🤝 콜라보 굿즈\n"
         "🖼️ 아트 프린트\n"
         "🗿 피규어\n\n"
-        "<b>기준:</b> 100만원 이하 | 투자 매력도 상위 아이템"
+        "<b>🏆 스포츠 대회 카테고리:</b>\n"
+        "🏋️ 하이록스 & 피트니스 레이스\n"
+        "🏃 마라톤 & 러닝\n"
+        "🎉 펀런 & 테마런 (포켓몬 런, 컬러런 등)\n"
+        "🧗 장애물 & 익스트림\n"
+        "🚴 자전거 · 수영 · 철인\n\n"
+        "<b>기준:</b> 리셀은 100만원 이하 / 스포츠는 입문~중급자"
     )
     await update.message.reply_text(text, parse_mode="HTML")
 
@@ -153,6 +166,53 @@ async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """'/report' 커맨드 — 즉시 리포트 생성"""
     logger.info(f"/report 요청: {update.effective_user.username}")
     await send_report(context.application, chat_id=str(update.effective_chat.id))
+
+
+async def send_sports_events(app: Application, chat_id: str):
+    """캐주얼 스포츠 대회 목록 생성 & 발송"""
+    logger.info("스포츠 대회 수집 시작...")
+
+    await app.bot.send_message(
+        chat_id=chat_id,
+        text="⏳ 캐주얼 스포츠 대회를 수집 중입니다... (약 1~2분 소요)",
+        parse_mode="HTML",
+    )
+
+    try:
+        header = build_sports_header()
+        await app.bot.send_message(chat_id=chat_id, text=header, parse_mode="HTML")
+
+        category_reports = await run_sports_events_collection(ANTHROPIC_API_KEY)
+
+        for report in category_reports:
+            await app.bot.send_message(
+                chat_id=chat_id,
+                text=report,
+                parse_mode="HTML",
+            )
+            await asyncio.sleep(0.5)
+
+        footer = build_sports_footer()
+        await app.bot.send_message(chat_id=chat_id, text=footer, parse_mode="HTML")
+
+        logger.info("스포츠 대회 목록 발송 완료!")
+
+    except Exception as e:
+        logger.error(f"스포츠 대회 수집 오류: {e}")
+        await app.bot.send_message(
+            chat_id=chat_id,
+            text=f"⚠️ 대회 수집 중 오류가 발생했습니다.\n<code>{e}</code>",
+            parse_mode="HTML",
+        )
+
+
+async def cmd_sports(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """'/sports' 커맨드 — 캐주얼 스포츠 대회 목록 받기"""
+    logger.info(f"/sports 요청: {update.effective_user.username}")
+    await send_sports_events(
+        context.application,
+        chat_id=str(update.effective_chat.id),
+    )
 
 
 # ─── 스케줄러 작업 ────────────────────────────────────────────
@@ -191,6 +251,7 @@ def main():
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("report", cmd_report))
+    app.add_handler(CommandHandler("sports", cmd_sports))
 
     # 스케줄러 설정
     scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
