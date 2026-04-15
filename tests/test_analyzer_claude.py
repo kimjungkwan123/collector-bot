@@ -103,6 +103,52 @@ class TestRunFullAnalysis:
         assert calls == [c["id"] for c in CATEGORIES]
         assert results[0] == f"report-{CATEGORIES[0]['id']}"
 
+    async def test_categories_run_in_parallel(self, monkeypatch):
+        """With 5 categories and an asyncio.Barrier(5), sequential execution
+        would deadlock on the first await. If this test completes, gather
+        actually schedules the coroutines concurrently."""
+        import asyncio as _asyncio
+
+        barrier = _asyncio.Barrier(len(CATEGORIES))
+
+        async def fake_analyze(client, category):
+            await barrier.wait()
+            return f"ok-{category['id']}"
+
+        monkeypatch.setattr(analyzer, "analyze_category", fake_analyze)
+        monkeypatch.setattr(analyzer.anthropic, "Anthropic", lambda api_key: MagicMock())
+
+        results = await _asyncio.wait_for(run_full_analysis("fake-key"), timeout=2.0)
+        assert len(results) == len(CATEGORIES)
+        assert all(r.startswith("ok-") for r in results)
+
+    async def test_analyze_category_does_not_block_event_loop(self, monkeypatch):
+        """analyze_category must offload the sync Anthropic SDK call so other
+        coroutines can make progress while it is outstanding."""
+        import asyncio as _asyncio
+        import time
+
+        marker = {"progressed": False}
+
+        async def ticker():
+            # Gives the event loop a chance to run while analyze_category
+            # is parked inside to_thread.
+            await _asyncio.sleep(0.05)
+            marker["progressed"] = True
+
+        def slow_create(**kwargs):
+            time.sleep(0.2)  # blocking — would freeze the loop without to_thread
+            return SimpleNamespace(content=[SimpleNamespace(text=json.dumps(VALID_PAYLOAD))])
+
+        client = MagicMock()
+        client.messages.create.side_effect = slow_create
+
+        await _asyncio.gather(
+            analyze_category(client, CATEGORY),
+            ticker(),
+        )
+        assert marker["progressed"] is True
+
     async def test_one_failing_category_does_not_abort_others(self, monkeypatch):
         async def fake_analyze(client, category):
             if category["id"] == "tcg":

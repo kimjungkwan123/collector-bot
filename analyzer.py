@@ -1,6 +1,7 @@
 """
 리셀 마켓 분석 엔진 — Claude AI를 사용해 카테고리별 Top 아이템 분석
 """
+import asyncio
 import html
 import anthropic
 import os
@@ -121,7 +122,12 @@ def format_category_report(category: dict, analysis_data: dict) -> str:
     return "\n".join(lines)
 
 async def analyze_category(client: anthropic.Anthropic, category: dict) -> str:
-    """단일 카테고리 분석 수행"""
+    """단일 카테고리 분석 수행.
+
+    anthropic.Anthropic의 messages.create는 블로킹 I/O이므로 이벤트 루프를
+    막지 않도록 asyncio.to_thread로 스레드풀에서 실행한다. 이렇게 해야
+    run_full_analysis의 asyncio.gather가 실제로 병렬로 동작한다.
+    """
     import json
 
     today = datetime.now().strftime("%Y년 %m월 %d일")
@@ -132,7 +138,8 @@ async def analyze_category(client: anthropic.Anthropic, category: dict) -> str:
     )
 
     try:
-        message = client.messages.create(
+        message = await asyncio.to_thread(
+            client.messages.create,
             model="claude-opus-4-5",
             max_tokens=2000,
             messages=[{"role": "user", "content": prompt}],
@@ -156,16 +163,21 @@ async def analyze_category(client: anthropic.Anthropic, category: dict) -> str:
         return f"{category['emoji']} <b>{category['name']}</b>\n⚠️ 분석 중 오류 발생: {e}\n"
 
 async def run_full_analysis(api_key: str) -> list[str]:
-    """전체 카테고리 분석 실행 — 카테고리별 메시지 리스트 반환"""
+    """전체 카테고리 분석 실행 — 카테고리별 메시지 리스트 반환.
+
+    모든 카테고리 분석을 asyncio.gather로 병렬 실행하므로 발송 지연이
+    가장 느린 한 개 카테고리의 응답 시간으로 수렴한다. 결과 순서는
+    CATEGORIES 순서를 그대로 유지한다.
+    """
     client = anthropic.Anthropic(api_key=api_key)
-    results = []
 
     for category in CATEGORIES:
         print(f"  분석 중: {category['emoji']} {category['name']}...")
-        report = await analyze_category(client, category)
-        results.append(report)
 
-    return results
+    results = await asyncio.gather(
+        *(analyze_category(client, category) for category in CATEGORIES)
+    )
+    return list(results)
 
 def build_header() -> str:
     today = datetime.now().strftime("%Y.%m.%d (%a)")
